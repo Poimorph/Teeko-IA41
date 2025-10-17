@@ -16,7 +16,8 @@
 - [ ] Implémentation du parallèlisme
 
 ---
-**## Jeu et IA**
+
+## Jeu et IA
 -Jeu:
     -implementer verifications de victoire
     -arreter un joueur de jouer dans une intersection non vide
@@ -29,7 +30,7 @@
     -implementer en prolog
     -implementer l'algo complét
 
-
+---
 ## Modèle d’Interface
 - [ ] Définir le GameState UI :  
 - phase = `Placement` | `Déplacement` | `Fin`  
@@ -135,6 +136,7 @@
 - [ ] 50 placements/déplacements -> pas de fuite.
 - [ ] FPS stable (60 FPS).
 - [ ] Vérifier contraste, lisibilité, accessibilité.
+
 
 
 
