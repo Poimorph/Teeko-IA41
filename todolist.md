@@ -19,16 +19,16 @@
 
 ## Jeu et IA
 -Jeu:
-    -implementer verifications de victoire
-    -arreter un joueur de jouer dans une intersection non vide
-    -implementer les 2 phases du jeu: placement de 4 pions et aprés, phase avec bougements de pions
-    -implementer mode facile: sans IA, coups aleatoaires
+    -[ ]implementer verifications de victoire
+    -[ ]arreter un joueur de jouer dans une intersection non vide
+    -[ ]implementer les 2 phases du jeu: placement de 4 pions et aprés, phase avec bougements de pions
+    -[ ]implementer mode facile: sans IA, coups aleatoaires
 
     
 -IA:Rechercher l'algo minimax
-    -definir l'Heuristique de chaque état
-    -implementer en prolog
-    -implementer l'algo complét
+    -[ ]definir l'Heuristique de chaque état
+    -[ ]implementer en prolog
+    -[ ]implementer l'algo complét
 
 ---
 ## Modèle d’Interface
@@ -136,6 +136,7 @@
 - [ ] 50 placements/déplacements -> pas de fuite.
 - [ ] FPS stable (60 FPS).
 - [ ] Vérifier contraste, lisibilité, accessibilité.
+
 
 
 
