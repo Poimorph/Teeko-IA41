@@ -2,29 +2,53 @@
 #define TEEKO_H
 
 #include <QMainWindow>
-#include <QPushButton>
+#include "Hole.hpp"
 
-// Minimal version - everything in one class
+QT_BEGIN_NAMESPACE
+namespace Ui {
+    class Teeko;
+}
+QT_END_NAMESPACE
+
 class Teeko : public QMainWindow {
     Q_OBJECT
 
 public:
-    Teeko(QWidget *parent = nullptr);
+    enum Phase {
+        DropPhase,
+        MovePhase
+    };
+    Q_ENUM(Phase)
 
-private slots:
-    void cellClicked();
+    Teeko(QWidget *parent = nullptr);
+    virtual ~Teeko();
+
+    Teeko::Phase phase() const { return m_phase; }
+
+signals:
+    void phaseChanged(Teeko::Phase phase);
+    void turnEnded();
+    void gameOver();
     void newGame();
 
 private:
-    QPushButton* cells[5][5];  // Board cells
-    int board[5][5];           // 0=empty, 1=red, 2=black
-    int currentPlayer;         // 1 or 2
-    int piecesPlaced;          // Count total pieces
-    bool movingPhase;          // true when in move phase
-    int selectedRow, selectedCol; // For movement
-    
-    void checkWin();
-    bool isAdjacent(int r1, int c1, int r2, int c2);
+    Ui::Teeko *ui;
+    Player* m_player;
+    Phase m_phase;
+    Hole* m_board[5][5];
+    int m_dropCount;
+    bool m_eatDone;
+    Hole* m_selectedHole;
+
+private slots:
+    void setPhase(Teeko::Phase phase);
+    void play(int id);
+    void switchPlayer();
+    void reset();
+    bool checkPosition();
+    void eat();
+    void showGameOver();
+    void updateStatusBar();
 };
 
-#endif
+#endif // TEEKO_H

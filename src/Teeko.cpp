@@ -1,194 +1,279 @@
 #include "Teeko.hpp"
-#include <QGridLayout>
+#include "ui_Teeko.h"
+
+#include <QDebug>
 #include <QMessageBox>
-#include <QMenuBar>
-#include <QStatusBar>
+#include <QSignalMapper>
 
-Teeko::Teeko(QWidget *parent) : QMainWindow(parent) {
-    // Basic window setup
-    setWindowTitle("Teeko");
-    
-    // Menu
-    QMenu* gameMenu = menuBar()->addMenu("Game");
-    QAction* newAction = gameMenu->addAction("New Game");
-    connect(newAction, &QAction::triggered, this, &Teeko::newGame);
-    
-    // Status bar
-    statusBar()->showMessage("Red's turn - Place piece");
-    
-    // Central widget with grid
-    QWidget* central = new QWidget(this);
-    setCentralWidget(central);
-    QGridLayout* layout = new QGridLayout(central);
-    
-    // Create 5x5 grid of buttons
-    for(int r = 0; r < 5; r++) {
-        for(int c = 0; c < 5; c++) {
-            cells[r][c] = new QPushButton();
-            cells[r][c]->setFixedSize(60, 60);
-            cells[r][c]->setProperty("row", r);
-            cells[r][c]->setProperty("col", c);
-            connect(cells[r][c], &QPushButton::clicked, this, &Teeko::cellClicked);
-            layout->addWidget(cells[r][c], r, c);
+Teeko::Teeko(QWidget *parent)
+    : QMainWindow(parent),
+      ui(new Ui::Teeko),
+      m_player(Player::player(Player::Red)),
+      m_phase(Teeko::DropPhase),
+      m_dropCount(0),
+      m_eatDone(true),
+      m_selectedHole(nullptr) {
+
+    ui->setupUi(this);
+
+    // Connect menu actions
+    QObject::connect(ui->actionNew, SIGNAL(triggered(bool)), this, SLOT(reset()));
+    QObject::connect(ui->actionQuit, SIGNAL(triggered(bool)), qApp, SLOT(quit()));
+
+    // Set up the board with signal mapper
+    QSignalMapper* map = new QSignalMapper(this);
+    for (int row = 0; row < 5; ++row) {
+        for (int col = 0; col < 5; ++col) {
+            QString holeName = QString("hole%1%2").arg(row).arg(col);
+            Hole* hole = this->findChild<Hole*>(holeName);
+            Q_ASSERT(hole != nullptr);
+
+            m_board[row][col] = hole;
+            hole->setRow(row);
+            hole->setCol(col);
+
+            int id = row * 5 + col;
+            map->setMapping(hole, id);
+            QObject::connect(hole, SIGNAL(clicked(bool)), map, SLOT(map()));
         }
     }
     
-    newGame();
+#if QT_VERSION < QT_VERSION_CHECK(6,0,0)
+    QObject::connect(map, SIGNAL(mapped(int)), this, SLOT(play(int)));
+#else
+    QObject::connect(map, SIGNAL(mappedInt(int)), this, SLOT(play(int)));
+#endif
+
+    // Connect game signals
+    QObject::connect(this, SIGNAL(turnEnded()), this, SLOT(switchPlayer()));
+    QObject::connect(this, SIGNAL(gameOver()), this, SLOT(showGameOver()));
+    QObject::connect(this, SIGNAL(newGame()), this, SLOT(eat()));
+    QObject::connect(this, SIGNAL(newGame()), this, SLOT(reset()));
+
+    this->reset();
+    this->adjustSize();
+    this->setFixedSize(this->size());
 }
 
-void Teeko::newGame() {
-    // Reset everything
-    currentPlayer = 1;
-    piecesPlaced = 0;
-    movingPhase = false;
-    selectedRow = selectedCol = -1;
-    
-    for(int r = 0; r < 5; r++) {
-        for(int c = 0; c < 5; c++) {
-            board[r][c] = 0;
-            cells[r][c]->setText("");
-            cells[r][c]->setStyleSheet("");
-        }
+Teeko::~Teeko() {
+    delete ui;
+}
+
+void Teeko::setPhase(Teeko::Phase phase) {
+    if (m_phase != phase) {
+        m_phase = phase;
+        emit phaseChanged(m_phase);
     }
-    
-    statusBar()->showMessage("Red's turn - Place piece");
 }
 
-void Teeko::cellClicked() {
-    QPushButton* btn = qobject_cast<QPushButton*>(sender());
-    int r = btn->property("row").toInt();
-    int c = btn->property("col").toInt();
-    
-    if(!movingPhase) {
-        // DROP PHASE - place pieces
-        if(board[r][c] == 0) {
-            board[r][c] = currentPlayer;
-            btn->setText(currentPlayer == 1 ? "R" : "B");
-            btn->setStyleSheet(currentPlayer == 1 ? 
-                "background-color: red; color: white; font-weight: bold;" : 
-                "background-color: black; color: white; font-weight: bold;");
+void Teeko::play(int id) {
+    int row = id / 5;
+    int col = id % 5;
+
+    Hole* hole = m_board[row][col];
+
+    if (m_phase == DropPhase) {
+        // Placement phase: click empty hole to place piece
+        if (hole->isEmpty()) {
+            hole->setPlayer(m_player);
+
+            if (checkPosition()) {
+                emit gameOver();
+                emit newGame();
+                return;
+            }
+
+            ++m_dropCount;
+            if (m_dropCount == 8) {
+                setPhase(Teeko::MovePhase);
+            }
+
+            emit turnEnded();
+        }
+
+    } else if (m_phase == MovePhase) {
+        // Movement phase
+        if (hole->player() == m_player) {
+            // Clear previous selections
+            for (int r = 0; r < 5; r++) {
+                for (int c = 0; c < 5; c++) {
+                    if (m_board[r][c]->isSelected()) 
+                        m_board[r][c]->setState(Hole::Used);
+                    if (m_board[r][c]->isPlayable()) 
+                        m_board[r][c]->setState(Hole::Empty);
+                }
+            }
+
+            hole->setState(Hole::Selected);
+            m_selectedHole = hole;
+
+            // Mark adjacent empty cells as playable
+            if (col + 1 < 5 && m_board[row][col + 1]->isEmpty())
+                m_board[row][col + 1]->setState(Hole::Playable);
+            if (col + 1 < 5 && row + 1 < 5 && m_board[row + 1][col + 1]->isEmpty())
+                m_board[row + 1][col + 1]->setState(Hole::Playable);
+            if (row + 1 < 5 && m_board[row + 1][col]->isEmpty())
+                m_board[row + 1][col]->setState(Hole::Playable);
+            if (row + 1 < 5 && col - 1 >= 0 && m_board[row + 1][col - 1]->isEmpty())
+                m_board[row + 1][col - 1]->setState(Hole::Playable);
+            if (col - 1 >= 0 && m_board[row][col - 1]->isEmpty())
+                m_board[row][col - 1]->setState(Hole::Playable);
+            if (row - 1 >= 0 && col - 1 >= 0 && m_board[row - 1][col - 1]->isEmpty())
+                m_board[row - 1][col - 1]->setState(Hole::Playable);
+            if (row - 1 >= 0 && m_board[row - 1][col]->isEmpty())
+                m_board[row - 1][col]->setState(Hole::Playable);
+            if (row - 1 >= 0 && col + 1 < 5 && m_board[row - 1][col + 1]->isEmpty())
+                m_board[row - 1][col + 1]->setState(Hole::Playable);
+        }
+
+        if (hole->isPlayable()) {
+            // Move piece to this playable cell
+            for (int r = 0; r < 5; r++) {
+                for (int c = 0; c < 5; c++) {
+                    if (m_board[r][c]->isSelected()) {
+                        m_board[r][c]->setPlayer(nullptr);
+                        m_board[r][c]->setState(Hole::Empty);
+                    }
+                    if (m_board[r][c]->isPlayable()) {
+                        m_board[r][c]->setState(Hole::Empty);
+                    }
+                }
+            }
+
+            hole->setPlayer(m_player);
+
+            if (checkPosition()) {
+                emit gameOver();
+                emit newGame();
+                return;
+            }
             
-            piecesPlaced++;
-            checkWin();
-            
-            if(piecesPlaced == 8) {
-                movingPhase = true;
-                statusBar()->showMessage(QString("%1's turn - Move piece")
-                    .arg(currentPlayer == 1 ? "Red" : "Black"));
-            } else {
-                currentPlayer = (currentPlayer == 1) ? 2 : 1;
-                statusBar()->showMessage(QString("%1's turn - Place piece")
-                    .arg(currentPlayer == 1 ? "Red" : "Black"));
-            }
+            emit turnEnded();
         }
-    } else {
-        // MOVE PHASE
-        if(selectedRow == -1) {
-            // Select a piece
-            if(board[r][c] == currentPlayer) {
-                selectedRow = r;
-                selectedCol = c;
-                cells[r][c]->setStyleSheet(cells[r][c]->styleSheet() + 
-                    "border: 3px solid yellow;");
-                statusBar()->showMessage("Click adjacent cell to move");
-            }
-        } else {
-            // Try to move
-            if(board[r][c] == 0 && isAdjacent(selectedRow, selectedCol, r, c)) {
-                // Move the piece
-                board[r][c] = board[selectedRow][selectedCol];
-                board[selectedRow][selectedCol] = 0;
-                
-                cells[r][c]->setText(cells[selectedRow][selectedCol]->text());
-                cells[r][c]->setStyleSheet(cells[selectedRow][selectedCol]->styleSheet().replace("border: 3px solid yellow;", ""));
-                cells[selectedRow][selectedCol]->setText("");
-                cells[selectedRow][selectedCol]->setStyleSheet("");
-                
-                selectedRow = selectedCol = -1;
-                checkWin();
-                
-                currentPlayer = (currentPlayer == 1) ? 2 : 1;
-                statusBar()->showMessage(QString("%1's turn - Move piece")
-                    .arg(currentPlayer == 1 ? "Red" : "Black"));
-            } else {
-                // Deselect
-                cells[selectedRow][selectedCol]->setStyleSheet(
-                    cells[selectedRow][selectedCol]->styleSheet().replace("border: 3px solid yellow;", ""));
-                selectedRow = selectedCol = -1;
-                statusBar()->showMessage(QString("%1's turn - Move piece")
-                    .arg(currentPlayer == 1 ? "Red" : "Black"));
-            }
-        }
+    }
+
+    if (!m_eatDone) {
+        m_eatDone = true;
+        reset();
     }
 }
 
-bool Teeko::isAdjacent(int r1, int c1, int r2, int c2) {
-    int dr = abs(r2 - r1);
-    int dc = abs(c2 - c1);
-    return (dr <= 1 && dc <= 1 && (dr > 0 || dc > 0));
+void Teeko::switchPlayer() {
+    m_player = m_player->other();
+    this->updateStatusBar();
 }
 
-void Teeko::checkWin() {
-    // Check horizontal
-    for(int r = 0; r < 5; r++) {
-        for(int c = 0; c < 2; c++) {
-            int count = 0;
-            for(int i = 0; i < 4; i++) {
-                if(board[r][c+i] == currentPlayer) count++;
-            }
-            if(count == 4) {
-                QMessageBox::information(this, "Winner!", 
-                    QString("%1 wins!").arg(currentPlayer == 1 ? "Red" : "Black"));
-                newGame();
-                return;
-            }
+void Teeko::reset() {
+    // Reset board
+    for (int row = 0; row < 5; ++row) {
+        for (int col = 0; col < 5; ++col) {
+            Hole* hole = m_board[row][col];
+            hole->setPlayer(nullptr);
+            hole->setState(Hole::Empty);
         }
     }
-    
-    // Check vertical
-    for(int c = 0; c < 5; c++) {
-        for(int r = 0; r < 2; r++) {
-            int count = 0;
-            for(int i = 0; i < 4; i++) {
-                if(board[r+i][c] == currentPlayer) count++;
+
+    // Reset to initial state
+    m_player = Player::player(Player::Red);
+    m_phase = DropPhase;
+    m_dropCount = 0;
+    m_selectedHole = nullptr;
+
+    this->updateStatusBar();
+}
+
+bool Teeko::checkPosition() {
+    int combo = 0, row, col, attmpt;
+
+    // Check rows
+    for (row = 0; row < 5; row++) {
+        for (attmpt = 0; attmpt < 2; attmpt++) {
+            for (col = 0; col < 4; col++) {
+                Hole* hole = m_board[row][col + attmpt];
+                if (hole->player() == m_player) {
+                    combo++;
+                    if (combo == 4) return true;
+                }
             }
-            if(count == 4) {
-                QMessageBox::information(this, "Winner!", 
-                    QString("%1 wins!").arg(currentPlayer == 1 ? "Red" : "Black"));
-                newGame();
-                return;
-            }
+            combo = 0;
         }
     }
-    
-    // Check diagonals
-    for(int r = 0; r < 2; r++) {
-        for(int c = 0; c < 2; c++) {
-            int count = 0;
-            for(int i = 0; i < 4; i++) {
-                if(board[r+i][c+i] == currentPlayer) count++;
+
+    // Check columns
+    for (col = 0; col < 5; col++) {
+        for (attmpt = 0; attmpt < 2; attmpt++) {
+            for (row = 0; row < 4; row++) {
+                Hole* hole = m_board[row + attmpt][col];
+                if (hole->player() == m_player) {
+                    combo++;
+                    if (combo == 4) return true;
+                }
             }
-            if(count == 4) {
-                QMessageBox::information(this, "Winner!", 
-                    QString("%1 wins!").arg(currentPlayer == 1 ? "Red" : "Black"));
-                newGame();
-                return;
-            }
+            combo = 0;
         }
     }
-    
-    // Check 2x2 square
-    for(int r = 0; r < 4; r++) {
-        for(int c = 0; c < 4; c++) {
-            if(board[r][c] == currentPlayer &&
-               board[r][c+1] == currentPlayer &&
-               board[r+1][c] == currentPlayer &&
-               board[r+1][c+1] == currentPlayer) {
-                QMessageBox::information(this, "Winner!", 
-                    QString("%1 wins!").arg(currentPlayer == 1 ? "Red" : "Black"));
-                newGame();
-                return;
+
+    // Check secondary diagonals
+    for (row = 0; row < 2; row++) {
+        for (col = 3; col < 5; col++) {
+            for (attmpt = 0; attmpt < 4; attmpt++) {
+                Hole* hole = m_board[row + attmpt][col - attmpt];
+                if (hole->player() == m_player) {
+                    combo++;
+                    if (combo == 4) return true;
+                }
             }
+            combo = 0;
         }
     }
+
+    // Check main diagonals
+    for (row = 0; row < 2; row++) {
+        for (col = 0; col < 2; col++) {
+            for (attmpt = 0; attmpt < 4; attmpt++) {
+                Hole* hole = m_board[row + attmpt][col + attmpt];
+                if (hole->player() == m_player) {
+                    combo++;
+                    if (combo == 4) return true;
+                }
+            }
+            combo = 0;
+        }
+    }
+
+    // Check 2x2 squares
+    for (row = 0; row < 4; row++) {
+        for (col = 0; col < 4; col++) {
+            Hole* hole;
+            hole = m_board[row][col];
+            if (hole->player() == m_player) combo++;
+            hole = m_board[row][col + 1];
+            if (hole->player() == m_player) combo++;
+            hole = m_board[row + 1][col + 1];
+            if (hole->player() == m_player) combo++;
+            hole = m_board[row + 1][col];
+            if (hole->player() == m_player) combo++;
+
+            if (combo == 4) return true;
+            combo = 0;
+        }
+    }
+
+    return false;
+}
+
+void Teeko::showGameOver() {
+    QMessageBox::information(this, tr("Winner"),
+        tr("Congratulations! %1 wins!").arg(m_player->name()));
+}
+
+void Teeko::updateStatusBar() {
+    QString phase(m_phase == Teeko::DropPhase ? tr("placement") : tr("movement"));
+    ui->statusbar->showMessage(tr("%1 phase: %2's turn")
+                               .arg(phase)
+                               .arg(m_player->name()));
+}
+
+void Teeko::eat() {
+    m_eatDone = false;
 }

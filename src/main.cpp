@@ -1,4 +1,4 @@
-#include "Teeko.h"
+#include "Teeko.hpp"
 #include <QApplication>
 
 int main(int argc, char *argv[]) {
