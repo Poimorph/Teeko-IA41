@@ -3,6 +3,7 @@
 
 #include <QMainWindow>
 #include "Hole.hpp"
+#include "PrologAI.hpp"
 
 QT_BEGIN_NAMESPACE
 namespace Ui {
@@ -20,10 +21,17 @@ public:
     };
     Q_ENUM(Phase)
 
+    enum GameMode {
+        PlayerVsPlayer,
+        PlayerVsAI
+    };
+    Q_ENUM(GameMode)
+
     Teeko(QWidget *parent = nullptr);
     virtual ~Teeko();
 
     Teeko::Phase phase() const { return m_phase; }
+    Teeko::GameMode gameMode() const { return m_gameMode; }
 
 signals:
     void phaseChanged(Teeko::Phase phase);
@@ -39,6 +47,11 @@ private:
     int m_dropCount;
     bool m_eatDone;
     Hole* m_selectedHole;
+    
+    // AI support
+    PrologAI* m_ai;
+    GameMode m_gameMode;
+    bool m_waitingForAI;
 
 private slots:
     void setPhase(Teeko::Phase phase);
@@ -49,6 +62,18 @@ private slots:
     void eat();
     void showGameOver();
     void updateStatusBar();
+    
+    // AI slots
+    void setGameMode(GameMode mode);
+    void onAIReady();
+    void onAIDropReceived(int row, int col);
+    void onAIMoveReceived(int fromRow, int fromCol, int toRow, int toCol);
+    void onAIError(const QString& error);
+    void onAIConnectionLost();
+    
+    // Menu actions
+    void toggleAIMode(bool enabled);
+    void startAI();
 };
 
 #endif // TEEKO_H
