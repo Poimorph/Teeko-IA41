@@ -1,8 +1,0 @@
-//
-// Created by suhayb on 13/10/2025.
-//
-
-#ifndef CMAKESFMLPROJECT_EVENTS_HPP
-#define CMAKESFMLPROJECT_EVENTS_HPP
-
-#endif //CMAKESFMLPROJECT_EVENTS_HPP
