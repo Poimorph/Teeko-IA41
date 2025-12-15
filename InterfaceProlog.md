@@ -171,7 +171,6 @@ undo_move(+GameState, -PreviousState, -Move)
 
 apply_move_sequence(+InitialState, +MovesList, -FinalState)
 % Applique plusieurs coups en séquence
-```
 
 ## Vérification des Conditions de Victoire
 
