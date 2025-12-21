@@ -727,17 +727,24 @@ place2board(_,[],[]).
 place2board(Gamestate,[Coup|Coups],[NewPlateau|Plateaus]):- make_move(Gamestate,Coup,NewPlateau),
 place2board(Gamestate,Coups,Plateaus).
 
+/*permuterP(+Player, -Autre player)
+échanger atome player
+*/
 permuterP(player1,player2).
 permuterP(player2,player1).
 
 /*minimax(+Player,+GameState,+Profondité,-Meilleur Coup, -Meilleur Valeur)
+prédicat non récursif du minimax: géneration de touts les coups légaux à partir d'un état GameState et exploration de toutes les possibilités.
 */
 minimax(_,[GameState|_],0,GameState, 1):-!.
 minimax(Player,GameState,Prof,MCoup,MVal):- !,
 get_all_legal_moves(GameState, Player, Moves),place2board(GameState,Moves,Plateaus), 
 minimaxMCoup(Player,Plateaus,Prof,MCoup,MVal).
 
-
+/*minimaxMCoup(+Player,+Liste de Gamestates Coups, + Profondité,-MeilleurCoup,-MeilleurValeur)
+prédicat loop récursif du minimax, avec 3 cas en evaluant le gamestate actuel.
+Comparation de coups est fait au retour
+*/
 minimaxMCoup(player2,[],_,_,-2):-!.
 minimaxMCoup(player1,[],_,_,2):-!.
 minimaxMCoup(Player,[GameState|GameStates],P,MCoup,MVal):- (P>0->!,
