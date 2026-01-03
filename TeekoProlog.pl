@@ -75,7 +75,6 @@ piece_at(GameState, pos(R, C), Piece) :-
     piece_at(GameState, R, C, Piece).
 
 % get_all_pieces(+GameState, +Player, -Positions)
-% Retourne toutes les positions occupées par les pièces d'un joueur
 get_all_pieces(GameState, Player, Positions) :-
     get_board(GameState, Board),
     findall(
@@ -87,31 +86,18 @@ get_all_pieces(GameState, Player, Positions) :-
     ).
 
 % Utilitaire: remplacer le Nième élément d'une liste
-replace_nth([_|T], 1, X, [X|T]).
-replace_nth([H|T], I, X, [H|R]) :-
+replace_nth([H|T], I, X, [H|R]) :- 
     I > 1,
     I1 is I - 1,
     replace_nth(T, I1, X, R).
+replace_nth([_|T], 1, X, [X|T]).
 
 % set_cell(+Board, +Row, +Col, +Value, -NewBoard)
 % Modifie une cellule du plateau
 set_cell(Board, R, C, Val, NewBoard) :-
-    nth1(R, Board, Row),
+    nth1(R, Board, Row), 
     replace_nth(Row, C, Val, NewRow),
     replace_nth(Board, R, NewRow, NewBoard).
-
-% board_to_string(+GameState, -String)
-% Convertit le plateau en chaîne pour affichage
-board_to_string(GameState, String) :-
-    get_board(GameState, Board),
-    with_output_to(string(String),
-        forall(member(Row, Board),
-            (write(Row), nl)
-        )
-    ).
-
-get_board_as_matrix(GameState, Matrix) :-
-    get_board(GameState, Matrix).
 
 % =============================================================================
 % GESTION DES PHASES ET TOURS
@@ -231,44 +217,14 @@ get_placement_moves(GameState, Player, Moves) :-
 % get_all_legal_moves(+GameState, +Player, -MovesList)
 % Retourne tous les coups légaux pour un joueur
 get_all_legal_moves(GameState, Player, Moves) :-
-    GameState = game_state(_, phase(Phase), turn(Player), _, _, _),
+    get_phase(GameState, Phase),
+    get_turn(GameState, Player),
     (   Phase = placement ->
         get_placement_moves(GameState, Player, Moves)
     ;   Phase = movement ->
         get_movement_moves(GameState, Player, Moves)
     ;   Moves = []
     ).
-
-% =============================================================================
-% VALIDATION DÉTAILLÉE DES COUPS
-% =============================================================================
-
-% validate_move_detailed(+GameState, +Move, -Result)
-% Result = ok(Message) ou error(Message)
-validate_move_detailed(GameState, place(Player, R, C), ok('placement ok')) :-
-    GameState = game_state(_, phase(placement), turn(Player), _, _, _),
-    is_valid_placement(GameState, R, C), !.
-
-validate_move_detailed(game_state(_, phase(Phase), turn(Turn), _, _, _), 
-                       place(Player, _, _), 
-                       error('not in placement phase or not your turn')) :-
-    (Phase \== placement ; Player \== Turn), !.
-
-validate_move_detailed(_, place(_, _, _), error('invalid placement: cell occupied or out of bounds')).
-
-validate_move_detailed(GameState, move(Player, FR, FC, TR, TC), ok('movement ok')) :-
-    GameState = game_state(_, phase(movement), turn(Player), _, _, _),
-    piece_at(GameState, FR, FC, Player),
-    piece_at(GameState, TR, TC, empty),
-    is_adjacent((FR, FC), (TR, TC)), !.
-
-validate_move_detailed(game_state(_, phase(Phase), turn(Turn), _, _, _), 
-                       move(Player, _, _, _, _), 
-                       error('not in movement phase or not your turn')) :-
-    (Phase \== movement ; Player \== Turn), !.
-
-validate_move_detailed(_, move(_, _, _, _, _), 
-                       error('invalid movement (source not yours / dest not empty / not adjacent)')).
 
 % =============================================================================
 % EXÉCUTION DES COUPS
@@ -316,7 +272,6 @@ move_piece(
     (Player == player1 -> NextPlayer = player2 ; NextPlayer = player1).
 
 % make_move(+GameState, +Move, -NewState)
-% Point d'entrée unifié pour exécuter un coup
 make_move(GameState, place(Player, R, C), NewState) :-
     place_piece(GameState, Player, R, C, NewState).
 
@@ -364,19 +319,467 @@ count_dir(Board, Player, R, C, DR, DC, Count) :-
 check_four_in_line(game_state(board(Board), _, _, _, _, _), Player) :-
     between(1, 5, R), 
     between(1, 5, C),
-    (   count_dir(Board, Player, R, C, 0, 1, N1), N1 >= 4    % horizontal
-    ;   count_dir(Board, Player, R, C, 1, 0, N2), N2 >= 4    % vertical
-    ;   count_dir(Board, Player, R, C, 1, 1, N3), N3 >= 4    % diag down-right
-    ;   count_dir(Board, Player, R, C, 1, -1, N4), N4 >= 4   % diag down-left
+    (   count_dir(Board, Player, R, C, 0, 1, N1), N1 >= 4
+    ;   count_dir(Board, Player, R, C, 1, 0, N2), N2 >= 4
+    ;   count_dir(Board, Player, R, C, 1, 1, N3), N3 >= 4
+    ;   count_dir(Board, Player, R, C, 1, -1, N4), N4 >= 4
     ), !.
 
-% game_status(+GameState, ?Status)
-% Retourne winner(Player) si victoire, sinon playing
-game_status(GameState, winner(Player)) :-
+check_win(GameState, Player) :-
     check_four_in_line(GameState, Player), !.
-game_status(GameState, winner(Player)) :-
+check_win(GameState, Player) :-
     check_four_in_square(GameState, Player), !.
+
+game_status(GameState, winner(Player)) :-
+    check_win(GameState, Player), !.
 game_status(_, playing).
+
+% =============================================================================
+% HEURISTIQUE D'ÉVALUATION
+% =============================================================================
+% Convention: score positif = favorable à player2 (IA)
+%             score négatif = favorable à player1 (humain)
+% =============================================================================
+
+% Poids pour l'heuristique
+% IMPORTANT: Les menaces adverses ont un poids PLUS ÉLEVÉ (défense > attaque)
+weight_win(100000).
+
+% Poids OFFENSIFS (pour l'IA)
+weight_three_in_line_attack(500).
+weight_two_in_line_attack(20).
+weight_three_in_square_attack(400).
+weight_two_in_square_attack(15).
+
+% Poids DÉFENSIFS (menaces adverses) - PLUS ÉLEVÉS !
+weight_three_in_line_defense(2000).    % Menace immédiate = très dangereux
+weight_two_in_line_defense(50).
+weight_three_in_square_defense(1500).
+weight_two_in_square_defense(40).
+
+% Poids positionnels (contrôle du centre)
+weight_center(20).              % Case centrale (3,3)
+weight_adjacent_center(10).     % Cases adjacentes au centre
+
+% evaluer_plateau(+GameState, -Score)
+% Fonction principale d'évaluation
+evaluer_plateau(GameState, Score) :-
+    % Vérifier victoire
+    (   check_win(GameState, player2) 
+    ->  weight_win(W), Score = W
+    ;   check_win(GameState, player1)
+    ->  weight_win(W), Score is -W
+    ;   % D'abord vérifier les menaces IMMÉDIATES (priorité absolue)
+        detect_immediate_threats(GameState, player1, ThreatCount1),
+        detect_immediate_threats(GameState, player2, ThreatCount2),
+        
+        % Calculer score heuristique avec poids asymétriques
+        eval_lignes_attack(GameState, player2, ScoreLignesP2),
+        eval_lignes_defense(GameState, player1, ScoreLignesP1),
+        eval_carres_attack(GameState, player2, ScoreCarresP2),
+        eval_carres_defense(GameState, player1, ScoreCarresP1),
+        eval_position(GameState, player2, ScorePosP2),
+        eval_position(GameState, player1, ScorePosP1),
+        
+        % Les menaces immédiates ont un impact ÉNORME
+        ThreatPenalty is ThreatCount1 * 5000,  % Pénalité si adversaire menace
+        ThreatBonus is ThreatCount2 * 3000,    % Bonus si on menace
+        
+        Score is (ScoreLignesP2 - ScoreLignesP1) + 
+                 (ScoreCarresP2 - ScoreCarresP1) + 
+                 (ScorePosP2 - ScorePosP1) +
+                 ThreatBonus - ThreatPenalty
+    ).
+
+% =============================================================================
+% DÉTECTION DES MENACES IMMÉDIATES
+% =============================================================================
+% Une menace immédiate = 3 pièces alignées (ou en carré) avec 1 case vide
+% Si l'adversaire a ça, il peut gagner au prochain coup !
+
+detect_immediate_threats(GameState, Player, Count) :-
+    all_lines(Lines),
+    all_squares(Squares),
+    append(Lines, Squares, AllFormations),
+    findall(1, (
+        member(Formation, AllFormations),
+        is_immediate_threat(GameState, Formation, Player)
+    ), Threats),
+    length(Threats, Count).
+
+% Vérifie si une formation est une menace immédiate pour Player
+is_immediate_threat(GameState, Formation, Player) :-
+    count_in_line(GameState, Formation, Player, 3, 1),  % Exactement 3 pièces + 1 vide
+    get_opponent(Player, Opponent),
+    count_in_line(GameState, Formation, Opponent, 0, _).  % Pas bloqué par l'adversaire
+
+% =============================================================================
+% Évaluation des lignes (horizontales, verticales, diagonales)
+% =============================================================================
+
+% Toutes les lignes gagnantes possibles (4 cases consécutives)
+all_lines(Lines) :-
+    % Lignes horizontales
+    findall(Line, 
+        (between(1, 5, R), between(1, 2, C), 
+         C2 is C+1, C3 is C+2, C4 is C+3,
+         Line = [pos(R,C), pos(R,C2), pos(R,C3), pos(R,C4)]),
+        HLines),
+    % Lignes verticales
+    findall(Line,
+        (between(1, 2, R), between(1, 5, C),
+         R2 is R+1, R3 is R+2, R4 is R+3,
+         Line = [pos(R,C), pos(R2,C), pos(R3,C), pos(R4,C)]),
+        VLines),
+    % Diagonales descendantes (\)
+    findall(Line,
+        (between(1, 2, R), between(1, 2, C),
+         R2 is R+1, C2 is C+1, R3 is R+2, C3 is C+2, R4 is R+3, C4 is C+3,
+         Line = [pos(R,C), pos(R2,C2), pos(R3,C3), pos(R4,C4)]),
+        D1Lines),
+    % Diagonales montantes (/)
+    findall(Line,
+        (between(4, 5, R), between(1, 2, C),
+         R2 is R-1, C2 is C+1, R3 is R-2, C3 is C+2, R4 is R-3, C4 is C+3,
+         Line = [pos(R,C), pos(R2,C2), pos(R3,C3), pos(R4,C4)]),
+        D2Lines),
+    append([HLines, VLines, D1Lines, D2Lines], Lines).
+
+% Compter les pièces d'un joueur et les cases vides dans une ligne
+count_in_line(_, [], _, 0, 0).
+count_in_line(GameState, [pos(R,C)|Rest], Player, PlayerCount, EmptyCount) :-
+    count_in_line(GameState, Rest, Player, RestPlayer, RestEmpty),
+    piece_at(GameState, R, C, Piece),
+    (   Piece == Player 
+    ->  PlayerCount is RestPlayer + 1, EmptyCount = RestEmpty
+    ;   Piece == empty
+    ->  EmptyCount is RestEmpty + 1, PlayerCount = RestPlayer
+    ;   PlayerCount = RestPlayer, EmptyCount = RestEmpty
+    ).
+
+% Évaluer une ligne pour un joueur (MODE ATTAQUE - nos pièces)
+eval_single_line_attack(GameState, Line, Player, Score) :-
+    count_in_line(GameState, Line, Player, PCount, ECount),
+    get_opponent(Player, Opponent),
+    count_in_line(GameState, Line, Opponent, OppCount, _),
+    (   OppCount > 0 
+    ->  Score = 0  % Ligne bloquée par l'adversaire
+    ;   PCount = 3, ECount >= 1
+    ->  weight_three_in_line_attack(W), Score = W
+    ;   PCount = 2, ECount >= 2
+    ->  weight_two_in_line_attack(W), Score = W
+    ;   Score = 0
+    ).
+
+% Évaluer une ligne pour un joueur (MODE DÉFENSE - pièces adverses = menace)
+eval_single_line_defense(GameState, Line, Player, Score) :-
+    count_in_line(GameState, Line, Player, PCount, ECount),
+    get_opponent(Player, Opponent),
+    count_in_line(GameState, Line, Opponent, OppCount, _),
+    (   OppCount > 0 
+    ->  Score = 0  % Ligne bloquée, pas de menace
+    ;   PCount = 3, ECount >= 1
+    ->  weight_three_in_line_defense(W), Score = W  % MENACE CRITIQUE !
+    ;   PCount = 2, ECount >= 2
+    ->  weight_two_in_line_defense(W), Score = W
+    ;   Score = 0
+    ).
+
+% Évaluer toutes les lignes (attaque)
+eval_lignes_attack(GameState, Player, TotalScore) :-
+    all_lines(Lines),
+    findall(S, (member(Line, Lines), eval_single_line_attack(GameState, Line, Player, S)), Scores),
+    sum_list(Scores, TotalScore).
+
+% Évaluer toutes les lignes (défense)
+eval_lignes_defense(GameState, Player, TotalScore) :-
+    all_lines(Lines),
+    findall(S, (member(Line, Lines), eval_single_line_defense(GameState, Line, Player, S)), Scores),
+    sum_list(Scores, TotalScore).
+
+% =============================================================================
+% Évaluation des carrés 2x2
+% =============================================================================
+
+% Tous les carrés 2x2 possibles
+all_squares(Squares) :-
+    findall(Square,
+        (between(1, 4, R), between(1, 4, C),
+         R2 is R+1, C2 is C+1,
+         Square = [pos(R,C), pos(R,C2), pos(R2,C), pos(R2,C2)]),
+        Squares).
+
+% Évaluer un carré pour un joueur (MODE ATTAQUE)
+eval_single_square_attack(GameState, Square, Player, Score) :-
+    count_in_line(GameState, Square, Player, PCount, ECount),
+    get_opponent(Player, Opponent),
+    count_in_line(GameState, Square, Opponent, OppCount, _),
+    (   OppCount > 0
+    ->  Score = 0  % Carré bloqué
+    ;   PCount = 3, ECount >= 1
+    ->  weight_three_in_square_attack(W), Score = W
+    ;   PCount = 2, ECount >= 2
+    ->  weight_two_in_square_attack(W), Score = W
+    ;   Score = 0
+    ).
+
+% Évaluer un carré pour un joueur (MODE DÉFENSE)
+eval_single_square_defense(GameState, Square, Player, Score) :-
+    count_in_line(GameState, Square, Player, PCount, ECount),
+    get_opponent(Player, Opponent),
+    count_in_line(GameState, Square, Opponent, OppCount, _),
+    (   OppCount > 0
+    ->  Score = 0  % Carré bloqué, pas de menace
+    ;   PCount = 3, ECount >= 1
+    ->  weight_three_in_square_defense(W), Score = W  % MENACE CRITIQUE !
+    ;   PCount = 2, ECount >= 2
+    ->  weight_two_in_square_defense(W), Score = W
+    ;   Score = 0
+    ).
+
+% Évaluer tous les carrés (attaque)
+eval_carres_attack(GameState, Player, TotalScore) :-
+    all_squares(Squares),
+    findall(S, (member(Sq, Squares), eval_single_square_attack(GameState, Sq, Player, S)), Scores),
+    sum_list(Scores, TotalScore).
+
+% Évaluer tous les carrés (défense)
+eval_carres_defense(GameState, Player, TotalScore) :-
+    all_squares(Squares),
+    findall(S, (member(Sq, Squares), eval_single_square_defense(GameState, Sq, Player, S)), Scores),
+    sum_list(Scores, TotalScore).
+
+% =============================================================================
+% Évaluation positionnelle (contrôle du centre)
+% =============================================================================
+
+% Cases centrales et leur valeur
+center_value(3, 3, V) :- weight_center(V).
+center_value(2, 2, V) :- weight_adjacent_center(V).
+center_value(2, 3, V) :- weight_adjacent_center(V).
+center_value(2, 4, V) :- weight_adjacent_center(V).
+center_value(3, 2, V) :- weight_adjacent_center(V).
+center_value(3, 4, V) :- weight_adjacent_center(V).
+center_value(4, 2, V) :- weight_adjacent_center(V).
+center_value(4, 3, V) :- weight_adjacent_center(V).
+center_value(4, 4, V) :- weight_adjacent_center(V).
+center_value(_, _, 0).
+
+% Évaluer la position des pièces d'un joueur
+eval_position(GameState, Player, TotalScore) :-
+    get_all_pieces(GameState, Player, Pieces),
+    findall(V, 
+        (member(pos(R,C), Pieces), center_value(R, C, V)), 
+        Values),
+    sum_list(Values, TotalScore).
+
+% =============================================================================
+% ALGORITHME MINIMAX AVEC ALPHA-BETA
+% =============================================================================
+
+% minimax(+GameState, +Profondeur, +Alpha, +Beta, +Maximisant, -MeilleurCoup, -MeilleureValeur)
+%
+% Maximisant = true  -> on maximise (tour de player2/IA)
+% Maximisant = false -> on minimise (tour de player1/humain)
+
+% Cas terminal : victoire player2 (IA)
+minimax(GameState, _, _, _, _, nil, Score) :-
+    check_win(GameState, player2), !,
+    weight_win(Score).
+
+% Cas terminal : victoire player1 (humain)  
+minimax(GameState, _, _, _, _, nil, Score) :-
+    check_win(GameState, player1), !,
+    weight_win(W),
+    Score is -W.
+
+% Cas terminal : profondeur 0
+minimax(GameState, 0, _, _, _, nil, Score) :- !,
+    evaluer_plateau(GameState, Score).
+
+% Cas récursif : maximisant (player2/IA joue)
+minimax(GameState, Prof, Alpha, Beta, true, MeilleurCoup, MeilleureVal) :-
+    Prof > 0,
+    get_turn(GameState, Player),
+    get_all_legal_moves(GameState, Player, Moves),
+    Moves \= [], !,
+    Prof1 is Prof - 1,
+    maximize(GameState, Moves, Prof1, Alpha, Beta, nil, -100000, MeilleurCoup, MeilleureVal).
+
+% Cas récursif : minimisant (player1/humain joue)
+minimax(GameState, Prof, Alpha, Beta, false, MeilleurCoup, MeilleureVal) :-
+    Prof > 0,
+    get_turn(GameState, Player),
+    get_all_legal_moves(GameState, Player, Moves),
+    Moves \= [], !,
+    Prof1 is Prof - 1,
+    minimize(GameState, Moves, Prof1, Alpha, Beta, nil, 100000, MeilleurCoup, MeilleureVal).
+
+% Pas de coups disponibles -> évaluer la position
+minimax(GameState, _, _, _, _, nil, Score) :-
+    evaluer_plateau(GameState, Score).
+
+% =============================================================================
+% Maximisation (tour de l'IA - player2)
+% =============================================================================
+
+% Plus de coups à évaluer
+maximize(_, [], _, _, _, BestMove, BestVal, BestMove, BestVal) :- !.
+
+% Élagage beta
+maximize(_, _, _, Alpha, Beta, BestMove, BestVal, BestMove, BestVal) :-
+    BestVal >= Beta, !.
+
+% Évaluer le prochain coup
+maximize(GameState, [Coup|Reste], Prof, Alpha, Beta, CoupAcc, ValAcc, MeilleurCoup, MeilleureVal) :-
+    make_move(GameState, Coup, NouvelEtat),
+    minimax(NouvelEtat, Prof, Alpha, Beta, false, _, Val),
+    (   Val > ValAcc
+    ->  NewCoup = Coup, NewVal = Val
+    ;   NewCoup = CoupAcc, NewVal = ValAcc
+    ),
+    NewAlpha is max(Alpha, NewVal),
+    maximize(GameState, Reste, Prof, NewAlpha, Beta, NewCoup, NewVal, MeilleurCoup, MeilleureVal).
+
+% =============================================================================
+% Minimisation (tour du joueur humain - player1)
+% =============================================================================
+
+% Plus de coups à évaluer
+minimize(_, [], _, _, _, BestMove, BestVal, BestMove, BestVal) :- !.
+
+% Élagage alpha
+minimize(_, _, _, Alpha, _, BestMove, BestVal, BestMove, BestVal) :-
+    BestVal =< Alpha, !.
+
+% Évaluer le prochain coup
+minimize(GameState, [Coup|Reste], Prof, Alpha, Beta, CoupAcc, ValAcc, MeilleurCoup, MeilleureVal) :-
+    make_move(GameState, Coup, NouvelEtat),
+    minimax(NouvelEtat, Prof, Alpha, Beta, true, _, Val),
+    (   Val < ValAcc
+    ->  NewCoup = Coup, NewVal = Val
+    ;   NewCoup = CoupAcc, NewVal = ValAcc
+    ),
+    NewBeta is min(Beta, NewVal),
+    minimize(GameState, Reste, Prof, Alpha, NewBeta, NewCoup, NewVal, MeilleurCoup, MeilleureVal).
+
+% ==========================================
+===================================
+% INTERFACE PRINCIPALE POUR L'IA
+% =============================================================================
+% helper : ajuste la profondeur en fonction de la phase du jeu (pour réduire le temps de calcul)
+get_adaptive_depth(GameState, Depth) :-
+    get_phase(GameState, Phase),
+    get_pieces_placed(GameState, P1, P2),
+    Total is P1 + P2,
+    (   Phase = placement, Total < 4 
+    ->  Depth = 2    % Début de partie : peu profond
+    ;   Phase = placement 
+    ->  Depth = 4    % Milieu placement
+    ;   Depth = 5    % Phase mouvement : plus profond
+    ).
+
+% get_best_move(+GameState, -Move)
+% Retourne le meilleur coup pour le joueur courant
+get_best_move(GameState, Move) :-
+    get_turn(GameState, Player),
+    get_all_legal_moves(GameState, Player, Moves),
+    Moves \= [],
+    get_adaptive_depth(GameState, Profondeur),
+    
+    % D'abord, vérifier s'il y a un coup gagnant immédiat
+    (   find_winning_move(GameState, Player, Moves, WinMove)
+    ->  Move = WinMove
+    ;   % Sinon, vérifier s'il faut bloquer une menace immédiate
+        get_opponent(Player, Opponent),
+        (   find_blocking_move(GameState, Opponent, Moves, BlockMove)
+        ->  Move = BlockMove
+        ;   % Sinon, utiliser minimax avec coups triés
+            order_moves(GameState, Player, Moves, OrderedMoves),
+            (Player = player2 -> Maximisant = true ; Maximisant = false),
+            minimax(GameState, Profondeur, -200000, 200000, Maximisant, Move, _Score),
+            Move \= nil
+        )
+    ), !.
+
+% =============================================================================
+% DÉTECTION DES COUPS CRITIQUES
+% =============================================================================
+
+% Trouve un coup gagnant immédiat s'il existe
+find_winning_move(GameState, Player, Moves, WinMove) :-
+    member(WinMove, Moves),
+    make_move(GameState, WinMove, NewState),
+    check_win(NewState, Player), !.
+
+% Trouve un coup qui bloque une menace immédiate de l'adversaire
+find_blocking_move(GameState, Opponent, Moves, BlockMove) :-
+    % Trouver les cases où l'adversaire pourrait gagner
+    get_all_legal_moves(GameState, Opponent, OppMoves),
+    member(OppWinMove, OppMoves),
+    make_move(GameState, OppWinMove, TestState),
+    check_win(TestState, Opponent), !,
+    % Trouver notre coup qui bloque cette case
+    get_blocking_position(OppWinMove, BlockPos),
+    member(BlockMove, Moves),
+    get_move_target(BlockMove, BlockPos), !.
+
+% Extraire la position cible d'un coup adverse
+get_blocking_position(place(_, R, C), pos(R, C)).
+get_blocking_position(move(_, _, _, R, C), pos(R, C)).
+
+% Vérifier si notre coup cible une position donnée
+get_move_target(place(_, R, C), pos(R, C)).
+get_move_target(move(_, _, _, R, C), pos(R, C)).
+
+% =============================================================================
+% TRI DES COUPS (MOVE ORDERING)
+% =============================================================================
+% Trier les coups pour améliorer l'élagage alpha-beta :
+% 1. Coups au centre (plus de potentiel)
+% 2. Coups adjacents à nos pièces
+% 3. Autres coups
+
+order_moves(GameState, Player, Moves, OrderedMoves) :-
+    map_move_scores(GameState, Player, Moves, ScoredMoves),
+    sort(1, @>=, ScoredMoves, SortedScored),
+    pairs_values(SortedScored, OrderedMoves).
+
+map_move_scores(_, _, [], []).
+map_move_scores(GameState, Player, [Move|Rest], [Score-Move|RestScored]) :-
+    score_move_priority(GameState, Player, Move, Score),
+    map_move_scores(GameState, Player, Rest, RestScored).
+
+% Calculer la priorité d'un coup pour le tri
+score_move_priority(GameState, Player, Move, Score) :-
+    get_move_target(Move, pos(R, C)),
+    % Bonus centre
+    (   (R = 3, C = 3) -> CenterScore = 50
+    ;   (R >= 2, R =< 4, C >= 2, C =< 4) -> CenterScore = 20
+    ;   CenterScore = 0
+    ),
+    % Bonus si le coup crée une menace
+    (   make_move(GameState, Move, NewState),
+        detect_immediate_threats(NewState, Player, TC),
+        TC > 0
+    ->  ThreatScore = 100
+    ;   ThreatScore = 0
+    ),
+    % Bonus si adjacent à nos pièces
+    (   is_adjacent_to_own_piece(GameState, Player, pos(R,C))
+    ->  AdjScore = 30
+    ;   AdjScore = 0
+    ),
+    Score is CenterScore + ThreatScore + AdjScore.
+
+% Vérifier si une position est adjacente à une de nos pièces
+is_adjacent_to_own_piece(GameState, Player, pos(R, C)) :-
+    get_all_pieces(GameState, Player, Pieces),
+    member(pos(PR, PC), Pieces),
+    DR is abs(R - PR),
+    DC is abs(C - PC),
+    DR =< 1, DC =< 1,
+    (DR > 0 ; DC > 0), !.
 
 % =============================================================================
 % UTILITAIRES D'AFFICHAGE
@@ -403,124 +806,17 @@ print_board_rows([Row|Rest], N) :-
     N2 is N + 1,
     print_board_rows(Rest, N2).
 
-% =============================================================================
-% SÉRIALISATION
-% =============================================================================
-
-% serialize_state(+GameState, -String)
-serialize_state(GameState, String) :-
-    term_string(GameState, String).
-
-% deserialize_state(+String, -GameState)
-deserialize_state(String, GameState) :-
-    term_string(GameState, String).
-
-% save_game_to_file(+GameState, +Filename)
-save_game_to_file(GameState, Filename) :-
-    serialize_state(GameState, String),
-    open(Filename, write, Stream),
-    write(Stream, String),
-    close(Stream).
-
-% load_game_from_file(+Filename, -GameState)
-load_game_from_file(Filename, GameState) :-
-    open(Filename, read, Stream),
-    read_string(Stream, _, String),
-    close(Stream),
-    deserialize_state(String, GameState).
-
-% =============================================================================
-% INFORMATIONS DU JEU
-% =============================================================================
-
-get_board_dimensions(5, 5).
-
-get_pieces_per_player(4).
-
-get_winning_formation_size(4).
-
-get_game_rules(Rules) :-
-    Rules = "Teeko est un jeu à deux joueurs sur un plateau 5x5. \
-             Chaque joueur dispose de 4 pièces. \
-             Le jeu comporte deux phases : placement et déplacement. \
-             Un joueur gagne en alignant 4 pièces en ligne droite (horizontale, verticale ou diagonale) \
-             ou en formant un carré 2x2. \
-             Les joueurs jouent à tour de rôle, et aucun coup ne peut placer une pièce sur une case occupée.".
-
-get_game_configuration(Config) :-
-    get_board_dimensions(R, C),
-    get_pieces_per_player(Pieces),
-    get_winning_formation_size(Size),
-    Config = config{
-        board_rows: R,
-        board_cols: C,
-        pieces_per_player: Pieces,
-        winning_formation_size: Size
-    }.
-
-% =============================================================================
-% SUPPORT PROTOCOLE DE COMMUNICATION
-% =============================================================================
-
-parse_command(CommandString, Command, Arguments) :-
-    split_string(CommandString, " ", "", [CmdStr|Args]),
-    atom_string(Command, CmdStr),
-    Arguments = Args.
-
-format_response(ok, Data, Response) :-
-    format(string(Response), "OK ~w", [Data]).
-
-format_response(error, Message, Response) :-
-    format(string(Response), "ERROR ~w", [Message]).
-
-create_error_response(Code, Message, Response) :-
-    format(string(Response), "ERROR ~w: ~w", [Code, Message]).
-
-create_success_response(Data, Response) :-
-    format(string(Response), "OK ~w", [Data]).
-
-get_game_status(GameState, Status) :-
-    get_phase(GameState, Phase),
-    get_turn(GameState, Turn),
-    get_move_count(GameState, MoveCount),
-    game_status(GameState, GameResult),
-    Status = status(phase(Phase), turn(Turn), moves(MoveCount), result(GameResult)).
-
-format_board_for_gui(GameState, GUIFormat) :-
+board_to_string(GameState, String) :-
     get_board(GameState, Board),
-    GUIFormat = Board.
+    with_output_to(string(String),
+        forall(member(Row, Board),
+            (write(Row), nl)
+        )
+    ).
 
 % =============================================================================
-% DEBUG ET VALIDATION
+% VALIDATION DE L'ÉTAT
 % =============================================================================
-
-validate_game_state(GameState) :-
-    is_valid_game_state(GameState) ->
-        writeln("Game state is valid.")
-    ;   (detect_state_anomalies(GameState, Anomalies),
-         format("Invalid game state detected: ~w~n", [Anomalies])).
-
-print_game_state(GameState) :-
-    get_board(GameState, Board),
-    writeln("Current board:"),
-    board_to_string(GameState, BoardStr),
-    writeln(BoardStr),
-    get_phase(GameState, Phase),
-    get_turn(GameState, Turn),
-    get_move_count(GameState, MoveCount),
-    format("Phase: ~w, Turn: ~w, Move count: ~w~n", [Phase, Turn, MoveCount]).
-
-get_state_statistics(GameState, Stats) :-
-    get_all_pieces(GameState, player1, P1Pieces),
-    get_all_pieces(GameState, player2, P2Pieces),
-    length(P1Pieces, P1Count),
-    length(P2Pieces, P2Count),
-    get_move_count(GameState, MoveCount),
-    Stats = stats{
-        player1_pieces: P1Count,
-        player2_pieces: P2Count,
-        move_count: MoveCount
-    }.
 
 is_valid_game_state(GameState) :-
     get_board(GameState, Board),
@@ -532,19 +828,12 @@ is_valid_game_state(GameState) :-
 
 length_is_5(Row) :- length(Row, 5).
 
-detect_state_anomalies(GameState, Anomalies) :-
-    findall(Issue,
-        (   (\+ is_valid_game_state(GameState), 
-             Issue = "Invalid board size or pieces count")
-        ;   (get_phase(GameState, Phase),
-             \+ member(Phase, [placement, movement]), 
-             Issue = "Invalid phase")
-        ;   (get_turn(GameState, Turn),
-             \+ member(Turn, [player1, player2]), 
-             Issue = "Invalid turn")
-        ),
-        Anomalies
-    ).
+print_game_state(GameState) :-
+    print_board(GameState),
+    get_phase(GameState, Phase),
+    get_turn(GameState, Turn),
+    get_move_count(GameState, MoveCount),
+    format("Phase: ~w, Turn: ~w, Move count: ~w~n", [Phase, Turn, MoveCount]).
 
 % =============================================================================
 % COMMUNICATION IPC
@@ -555,9 +844,7 @@ detect_state_anomalies(GameState, Anomalies) :-
 % =============================================================================
 
 main :-
-    init_game(GameState),
     retractall(current_game_state(_)),
-    assertz(current_game_state(GameState)),
     set_stream(user_output, buffer(line)),
     communication_loop.
 
@@ -587,6 +874,7 @@ process_line(Line) :-
 
 % INIT - Initialiser
 handle_command("INIT", _) :- !,
+    format("Initializing new game...~n", []),
     init_game(GameState),
     retractall(current_game_state(_)),
     assertz(current_game_state(GameState)),
@@ -603,17 +891,19 @@ handle_command("NEWGAME", _) :- !,
 handle_command("DROP", [RowStr, ColStr]) :- !,
     number_string(Row0, RowStr),
     number_string(Col0, ColStr),
-    Row is Row0 + 1,  % Convertir 0-4 -> 1-5
+    Row is Row0 + 1,
     Col is Col0 + 1,
     current_game_state(GameState),
     get_turn(GameState, Player),
     Move = place(Player, Row, Col),
-    (   make_move(GameState, Move, NewState) ->
+    (   make_move(GameState, Move, NewState)->
         retractall(current_game_state(_)),
         assertz(current_game_state(NewState)),
         send_response("OK ACK")
     ;   send_response("ERROR Invalid drop position")
-    ).
+    )
+    
+    .
 
 % MOVE fromRow fromCol toRow toCol - Le joueur déplace (coordonnées 0-4)
 handle_command("MOVE", [FromRowStr, FromColStr, ToRowStr, ToColStr]) :- !,
@@ -635,7 +925,6 @@ handle_command("MOVE", [FromRowStr, FromColStr, ToRowStr, ToColStr]) :- !,
     ;   send_response("ERROR Invalid move")
     ).
 
-% GETMOVE - Demander le coup de l'IA
 handle_command("GETMOVE", _) :- !,
     current_game_state(GameState),
     get_phase(GameState, Phase),
@@ -645,7 +934,7 @@ handle_command("GETMOVE", _) :- !,
             make_move(GameState, Move, NewState),
             retractall(current_game_state(_)),
             assertz(current_game_state(NewState)),
-            Row0 is Row - 1,  % Convertir 1-5 -> 0-4
+            Row0 is Row - 1,
             Col0 is Col - 1,
             format(string(Response), "OK DROP ~d ~d", [Row0, Col0]),
             send_response(Response)
@@ -697,14 +986,101 @@ send_error(Error) :-
     send_response(Msg).
 
 % =============================================================================
-% IA SIMPLE (À IMPLÉMENTER)
+% TESTS ET DEBUG
 % =============================================================================
 
-% get_best_move(+GameState, -Move)
-% TODO: Implémenter une IA (minimax, alpha-beta)
-% Pour l'instant, choisit un coup aléatoire parmi les coups légaux
-get_best_move(GameState, Move) :-
-    get_turn(GameState, Player),
-    get_all_legal_moves(GameState, Player, Moves),
-    Moves \= [],
-    random_member(Move, Moves).
+% test_ia/0 - Tester l'IA sur une position initiale
+test_ia :-
+    init_game(G),
+    writeln("=== Test IA ==="),
+    print_board(G),
+    writeln("Recherche du meilleur coup..."),
+    get_best_move(G, Move),
+    format("Meilleur coup trouvé: ~w~n", [Move]).
+
+% test_eval/0 - Tester l'évaluation sur différentes positions
+test_eval :-
+    init_game(G),
+    evaluer_plateau(G, Score),
+    format("Score position initiale: ~w~n", [Score]).
+
+% test_blocking/0 - Tester si l'IA bloque bien les menaces
+test_blocking :-
+    writeln("=== Test Blocage de Menace ==="),
+    % Créer une position où player1 a 3 pièces alignées
+    init_game(G0),
+    make_move(G0, place(player1, 1, 1), G1),
+    make_move(G1, place(player2, 3, 3), G2),
+    make_move(G2, place(player1, 1, 2), G3),
+    make_move(G3, place(player2, 4, 4), G4),
+    make_move(G4, place(player1, 1, 3), G5),  % player1 a 3 en ligne !
+    make_move(G5, place(player2, 5, 5), G6),
+    % Maintenant c'est à player1 de placer sa 4ème pièce
+    % Après, player2 devrait bloquer (1,4) pour éviter la victoire
+    make_move(G6, place(player1, 2, 2), G7),  % player1 place ailleurs
+    
+    writeln("Position avec menace de player1 (ligne 1):"),
+    print_board(G7),
+    
+    % Vérifier les menaces détectées
+    detect_immediate_threats(G7, player1, Threats),
+    format("Menaces immédiates de player1: ~w~n", [Threats]),
+    
+    evaluer_plateau(G7, Score),
+    format("Score du plateau: ~w~n", [Score]),
+    
+    writeln("IA (player2) devrait bloquer en (1,4)..."),
+    get_best_move(G7, Move),
+    format("Coup choisi par IA: ~w~n", [Move]),
+    
+    % Vérifier si c'est le bon coup
+    (   Move = place(player2, 1, 4)
+    ->  writeln("SUCCES: menace bloquée!")
+    ;   writeln("ECHEC: menace non bloquée!")).
+
+% test_winning/0 - Tester si l'IA prend un coup gagnant
+test_winning :-
+    writeln("=== Test Coup Gagnant ==="),
+    init_game(G0),
+    make_move(G0, place(player1, 5, 5), G1),
+    make_move(G1, place(player2, 1, 1), G2),
+    make_move(G2, place(player1, 5, 4), G3),
+    make_move(G3, place(player2, 1, 2), G4),
+    make_move(G4, place(player1, 5, 3), G5),
+    make_move(G5, place(player2, 1, 3), G6),  % player2 a 3 en ligne !
+    make_move(G6, place(player1, 4, 4), G7),
+    % player2 devrait placer sa 4ème pièce en (1,4) pour gagner
+    make_move(G7, place(player2, 2, 2), G8),  % player2 place sa 4ème ailleurs
+    
+    % Maintenant c'est à player1, puis player2 devrait chercher à gagner
+    make_move(G8, place(player1, 3, 3), G9),
+    
+    writeln("Position où player2 peut aligner:"),
+    print_board(G9),
+    
+    % En phase mouvement, tester si l'IA trouve le coup gagnant
+    writeln("IA cherche le meilleur coup..."),
+    get_best_move(G9, Move),
+    format("Coup choisi: ~w~n", [Move]).
+
+
+% simulate_game/0 - Simuler quelques coups
+simulate_game :-
+    init_game(G0),
+    writeln("Position initiale:"),
+    print_board(G0),
+    
+    % Player1 place en (3,3)
+    make_move(G0, place(player1, 3, 3), G1),
+    writeln("\nAprès player1 place (3,3):"),
+    print_board(G1),
+    evaluer_plateau(G1, S1),
+    format("Score: ~w~n", [S1]),
+    
+    % IA joue
+    get_best_move(G1, Move2),
+    format("\nIA choisit: ~w~n", [Move2]),
+    make_move(G1, Move2, G2),
+    print_board(G2),
+    evaluer_plateau(G2, S2),
+    format("Score: ~w~n", [S2]).
