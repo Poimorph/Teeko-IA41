@@ -663,8 +663,7 @@ minimize(GameState, [Coup|Reste], Prof, Alpha, Beta, CoupAcc, ValAcc, MeilleurCo
     NewBeta is min(Beta, NewVal),
     minimize(GameState, Reste, Prof, Alpha, NewBeta, NewCoup, NewVal, MeilleurCoup, MeilleureVal).
 
-% ==========================================
-===================================
+% =============================================================================
 % INTERFACE PRINCIPALE POUR L'IA
 % =============================================================================
 % helper : ajuste la profondeur en fonction de la phase du jeu (pour réduire le temps de calcul)
@@ -675,8 +674,8 @@ get_adaptive_depth(GameState, Depth) :-
     (   Phase = placement, Total < 4 
     ->  Depth = 2    % Début de partie : peu profond
     ;   Phase = placement 
-    ->  Depth = 4    % Milieu placement
-    ;   Depth = 5    % Phase mouvement : plus profond
+    ->  Depth = 3    % Milieu placement
+    ;   Depth = 4    % Phase mouvement : plus profond
     ).
 
 % get_best_move(+GameState, -Move)
